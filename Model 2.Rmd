@@ -1,0 +1,107 @@
+---
+title: "INFS692 Final Project: Model2"
+author: Yanfei Chen
+output: pdf_document
+date: "2022-12-15"
+---
+
+## Helper packages
+```{r}
+library(readr)
+library(factoextra)
+library(caret)
+library(mclust)
+library(dplyr)
+library(rsample) 
+library(keras)
+library(tensorflow)
+```
+
+Load dataset
+```{r}
+data <- read_csv("/Users/chenyanfei/Desktop/radiomics_completedata.csv")
+data$Failure.binary = as.factor(data$Failure.binary)
+```
+
+## Preprocess data
+Check for null/missing
+```{r}
+data_clean <- na.omit(data)
+# There's no null/missing value in the dataset.
+```
+Normalize the continuous variables.
+```{r}
+nor_data <- scale(data_clean[c(3:431)])
+# combine with the categorical variables
+new_data <- cbind(data_clean[2], nor_data)
+# change label type
+levels(new_data$Failure.binary)=c("No","Yes")
+new_data %>% 
+  mutate(Failure.binary = factor(Failure.binary, 
+                        labels = make.names(levels(Failure.binary))))
+```
+Split into train and test
+```{r}
+#Split the data into training (80%) and testing (20%)
+data_split <- initial_split(new_data, prop = .8, strata = "Failure.binary")
+data_train <- training(data_split)
+data_test  <- testing(data_split)
+```
+
+## Model 2
+Train Model
+```{r}
+Train_Features <- data.matrix(data_train[,-1])
+Train_Labels <- data_train$Failure.binary
+Test_Features <- data.matrix(data_test[,-1])
+Test_Labels <- data_test$Failure.binary
+to_categorical(as.numeric(Train_Labels))[,c(-1)] -> Train_Labels
+to_categorical(as.numeric(Test_Labels))[,c(-1)] -> Test_Labels
+
+as.matrix(apply(Train_Features, 2, function(x) (x-min(x))/(max(x) - min(x)))) -> Train_Features
+as.matrix(apply(Test_Features, 2, function(x) (x-min(x))/(max(x) - min(x)))) -> Test_Features
+```
+
+```{r}
+model <- keras_model_sequential() %>%
+  
+  layer_dense(units = 256, activation = "sigmoid", input_shape =ncol(Train_Features)) %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 64, activation = "sigmoid") %>% 
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 64, activation = "sigmoid") %>% 
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 2, activation = "softmax") %>% 
+
+
+  compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("accuracy")
+)
+
+model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_adam(),
+  metrics = c("accuracy")
+)
+```
+
+```{r}
+history <- model %>% fit(Train_Features,Train_Labels,validation_split = 0.15, epochs=10, batch_size = 128, shuffle = T)
+```
+
+Evaluate the trained model using testing dataset
+```{r}
+model %>%
+  evaluate(Test_Features, Test_Labels)
+```
+Model prediction
+```{r}
+model %>%
+  predict(Test_Features)
+```

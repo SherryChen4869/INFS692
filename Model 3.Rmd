@@ -1,0 +1,248 @@
+---
+title: 'INFS692 Final Project: Model 3'
+author: "Yanfei Chen"
+date: "2022-12-15"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+## Helper packages
+```{r}
+library(rsample) 
+library(dplyr)
+library(readr)
+library(factoextra)
+library(cluster)
+library(stringr) 
+library(gridExtra)
+library(mclust)
+library(tidyverse)
+```
+## Preprocess data
+Load dataset
+```{r}
+data <- read_csv("/Users/chenyanfei/Desktop/radiomics_completedata.csv")
+data$Failure.binary = as.factor(data$Failure.binary)
+```
+
+Check for null/missing
+```{r}
+data_clean <- na.omit(data)
+dim(data)
+dim(data_clean)
+# There's no null/missing value in the dataset.
+```
+
+Normalize the continuous variables
+```{r, results='hide'}
+nor_data <- scale(data_clean[c(3:431)])
+# combine with the categorical variables
+new_data <- cbind(data_clean[2], nor_data)
+# change label type
+levels(new_data$Failure.binary)=c("No","Yes")
+new_data %>% 
+  mutate(Failure.binary = factor(Failure.binary, 
+                        labels = make.names(levels(Failure.binary))))
+# all features
+Features <- data.matrix(new_data[,-1])
+```
+
+Split the data into training and testing 
+```{r}
+data_split <- initial_split(new_data, prop = .8, strata = "Failure.binary")
+data_train <- training(data_split)
+data_test  <- testing(data_split)
+```
+
+## Model 3
+K-Means
+```{r}
+k2 <- kmeans(Features, centers = 2, nstart = 25)
+k3 <- kmeans(Features, centers = 3, nstart = 25)
+k4 <- kmeans(Features, centers = 4, nstart = 25)
+k5 <- kmeans(Features, centers = 5, nstart = 25)
+```
+
+```{r}
+p1 <- fviz_cluster(k2, geom = "point", data = Features) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point",  data = Features) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point",  data = Features) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point",  data = Features) + ggtitle("k = 5")
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+```{r}
+#Determining Optimal Number of Clusters
+set.seed(123)
+# Compute and plot wss for k = 1 to k = 15
+k.values <- 1:15
+#function to compute total within-cluster sum of square 
+wss <- function(k) {
+  kmeans(Features, k, nstart = 10 )$tot.withinss
+}
+# extract wss for 2-15 clusters
+wss_values <- map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+```
+```{r}
+# Compute k-means clustering with k = 2
+set.seed(123)
+final <- kmeans(Features, 2, nstart = 25)
+
+#final data
+fviz_cluster(final, data = Features)
+```
+
+Hierarchical
+```{r}
+set.seed(123)
+
+# Dissimilarity matrix
+d <- dist(Features, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d, method = "complete" )
+```
+
+```{r}
+set.seed(123)
+
+# Compute maximum or complete linkage clustering with agnes
+hc2 <- agnes(Features, method = "complete")
+
+# Agglomerative coefficient
+hc2$ac
+```
+
+```{r}
+# methods to assess
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+# function to compute coefficient
+ac <- function(x) {
+  agnes(Features, method = x)$ac
+}
+
+# get agglomerative coefficient for each linkage method
+purrr::map_dbl(m, ac)
+
+# compute divisive hierarchical clustering
+hc4 <- diana(Features)
+
+# Divise coefficient; amount of clustering structure found
+hc4$dc
+```
+
+```{r}
+# Plot cluster results
+p1 <- fviz_nbclust(Features, FUN = hcut, method = "wss", 
+                   k.max = 10) +
+  ggtitle("(A) Elbow method")
+p2 <- fviz_nbclust(Features, FUN = hcut, method = "silhouette", 
+                   k.max = 10) +
+  ggtitle("(B) Silhouette method")
+p3 <- fviz_nbclust(Features, FUN = hcut, method = "gap_stat", 
+                   k.max = 10) +
+  ggtitle("(C) Gap statistic")
+
+# Display plots side by side
+gridExtra::grid.arrange(p1, p2, p3, nrow = 1)
+```
+
+```{r}
+# Ward's method
+hc5 <- hclust(d, method = "ward.D2" )
+
+# Cut tree into 6 groups
+sub_grp <- cutree(hc5, k = 6)
+
+# Number of members in each cluster
+table(sub_grp)
+```
+
+```{r}
+# Plot full dendogram
+fviz_dend(
+  hc5,
+  k = 6,
+  horiz = TRUE,
+  rect = TRUE,
+  rect_fill = TRUE,
+  rect_border = "jco",
+  k_colors = "jco",
+  cex = 0.1
+)
+
+
+dend_plot <- fviz_dend(hc5)                # create full dendogram
+dend_data <- attr(dend_plot, "dendrogram") # extract plot info
+dend_cuts <- cut(dend_data, h = 70.5)      # cut the dendogram at 
+# designated height
+# Create sub dendrogram plots
+p1 <- fviz_dend(dend_cuts$lower[[1]])
+p2 <- fviz_dend(dend_cuts$lower[[1]], type = 'circular')
+
+# Side by side plots
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+```
+
+Model Based
+```{r}
+F_mc <- Mclust(Features, 1:10)
+sort(F_mc$uncertainty, decreasing = TRUE) %>% head()
+
+plot(F_mc, what = 'BIC', 
+     legendArgs = list(x = "bottomright", ncol = 5))
+
+```
+
+```{r}
+probabilities <- F_mc$z 
+colnames(probabilities) <- paste0('C', 1:10)
+
+probabilities <- probabilities %>%
+  as.data.frame() %>%
+  mutate(id = row_number()) %>%
+  tidyr::gather(cluster, probability, -id)
+```
+
+```{r}
+ggplot(probabilities, aes(probability)) +
+  geom_histogram() +
+  facet_wrap(~ cluster, nrow = 2)
+```
+
+```{r}
+uncertainty <- data.frame( id = 1:nrow(Features), cluster =
+                           F_mc$classification,uncertainty =
+                           F_mc$uncertainty
+)
+
+uncertainty %>%
+  group_by(cluster) %>%
+  filter(uncertainty > 0.0) %>%
+  ggplot(aes(uncertainty, reorder(id, uncertainty))) +
+  geom_point() +
+  facet_wrap(~ cluster, scales = 'free_y', nrow = 1)
+
+
+cluster2 <- Features %>%
+  scale() %>%
+  as.data.frame() %>%
+  mutate(cluster = F_mc$classification) %>%
+  filter(cluster == 2) %>%
+  select(-cluster)
+
+cluster2 %>%
+  tidyr::gather(product, std_count) %>%
+  group_by(product) %>%
+  summarize(avg = mean(std_count)) %>%
+  ggplot(aes(avg, reorder(product, avg))) +
+  geom_point() +
+  labs(x = "Average standardized consumption", y = NULL)
+```

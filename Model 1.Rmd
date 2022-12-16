@@ -1,0 +1,168 @@
+---
+title: "INFS692 Final Project: Model 1"
+author: Yanfei Chen
+output: pdf_document
+date: "2022-12-15"
+---
+
+## Helper packages
+```{r}
+library(rsample)  
+library(readr)
+library(rpart) 
+library(caret)
+library(rpart.plot)
+library(ROCR)
+library(pROC)
+library(dplyr)
+library(vip)
+```
+
+Load dataset
+```{r}
+data <- read_csv("/Users/chenyanfei/Desktop/radiomics_completedata.csv")
+data$Failure.binary = as.factor(data$Failure.binary)
+```
+
+## Preprocess data
+Check for null/missing
+```{r}
+data_clean <- na.omit(data)
+dim(data)
+dim(data_clean)
+# There's no null/missing value in the dataset.
+```
+Normalize the continuous variables.
+```{r}
+nor_data <- scale(data_clean[c(3:431)])
+# combine with the categorical variables
+new_data <- cbind(data_clean[2], nor_data)
+# change label type
+levels(new_data$Failure.binary)=c("No","Yes")
+new_data %>% mutate(Failure.binary = factor(Failure.binary,labels= make.names(levels(Failure.binary))))
+```
+Get the correlation of the whole data except the categorical variables
+```{r}
+Features <- data.matrix(new_data[,-1])
+cor(Features)
+```
+Split the data into training (80%) and testing (20%)
+```{r}
+data_split <- initial_split(new_data, prop = .8, strata = "Failure.binary")
+data_train <- training(data_split)
+data_test  <- testing(data_split)
+```
+
+## Model 1
+Create an ensemble classification model (atleast 3 models).
+
+Model 1: KNN
+```{r}
+cv <- trainControl(
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 5,
+  classProbs = TRUE,                 
+  summaryFunction = twoClassSummary
+)
+
+hyper_grid <- expand.grid(
+  k = floor(seq(1, nrow(data_train)/3, length.out = 10))
+)
+```
+
+```{r}
+set.seed(456)
+
+model1 <- train(
+  Failure.binary ~ ., 
+  metric="ROC",
+  data = data_train, 
+  method = "knn",
+  tuneGrid = hyper_grid,
+  preProc = c("center", "scale"),
+  trControl = cv
+)
+```
+Top 20 features
+```{r}
+varImp(model1)
+```
+Performance of KNN
+```{r}
+prob1_train <- predict(model1, data_train, type = "prob")$Yes
+prob1_test <- predict(model1, data_test, type = "prob")$Yes
+
+roc(data_train$Failure.binary ~ prob1_train, plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main="KNN Training AUC")
+
+roc(data_test$Failure.binary ~ prob1_test, plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main="KNN Testing AUC")
+```
+
+Model 2: Decision tree
+```{r}
+model2 <- rpart(
+  formula = Failure.binary ~ .,
+  data    = data_train,
+  method  = "class"
+)
+#plotting
+rpart.plot(model2)
+```
+Top 20 Features
+```{r}
+vip(model2, num_features = 20, bar = FALSE)
+```
+
+```{r}
+prob2_train <- predict(model2, data_train, type = "prob")
+prob2_test <- predict(model2, data_test, type = "prob")
+
+roc(data_train$Failure.binary ~ prob2_train[,2], plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main="DT Training AUC")
+
+roc(data_test$Failure.binary ~ prob2_test[,2], plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main="DT Testing AUC")
+```
+
+Model 3: Random Forest
+```{r}
+set.seed(123)
+model3 <- train(
+  Failure.binary ~ ., 
+  data = data_train, 
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 10)
+)
+```
+Top 20 features
+```{r}
+vip(model3, num_features = 20, bar = FALSE)
+```
+Performance of RF
+```{r}
+prob3_train <- predict(model3, data_train, type = "prob")
+prob3_test <- predict(model3, data_test, type = "prob")
+
+roc(data_train$Failure.binary ~ prob3_train[,2], plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main="RF Traininging AUC")
+
+roc(data_test$Failure.binary ~ prob3_test[,2], plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+title(main="RF Testing AUC")
+```
+Ensemble three models together using majority of the predictions
+```{r}
+pred_avg<-(prob1_test+prob2_test[,2]+prob3_test[,2])/3
+pred_bi<-as.factor(ifelse(pred_avg>0.5,'Yes','No'))
+
+true_bi <- as.factor(data_test$Failure.binary)
+acc <- sum(true_bi==pred_bi)/length(true_bi)
+acc
+```
